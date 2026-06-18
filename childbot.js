@@ -11,8 +11,9 @@ function packet() {
     return "BOT-" + Date.now() + "-" + Math.floor(Math.random() * 9999);
 }
 
+// ================= CHILD BOT CLASS =================
 class ChildBot {
-    constructor(config, owner) {
+    constructor(config, owner, loginCallback) {
         this.owner = owner;
         this.room = config.room;
         this.username = config.username;
@@ -38,36 +39,60 @@ class ChildBot {
         this.repeatCount = 0;
         this.questionStartTime = 0;
         this.userScores = {};
+        
+        // ================= LOGIN VERIFICATION =================
+        this.loginCallback = loginCallback || null;
+        this.loginChecked = false;
+        this.loginSuccess = false;
+        
         this.connect();
     }
 
+    // ================= SAVE CONFIG =================
     saveConfig() {
         try {
             let db = loadBots();
             if (!db.mainbots || !db.mainbots[this.owner]) return;
+            
             let ownerData = db.mainbots[this.owner];
-            let index = ownerData.childbots.findIndex(x => x.username === this.username);
-            if (index === -1) return;
-            ownerData.childbots[index] = {
-                room: this.room,
-                username: this.username,
-                password: this.password,
-                mainMaster: this.mainMaster,
-                masters: this.masters,
-                settings: this.settings,
-                cricket: this.cricket
-            };
+            let childbots = ownerData.childbots || [];
+            
+            let index = childbots.findIndex(x => x.username === this.username);
+            if (index === -1) {
+                childbots.push({
+                    room: this.room,
+                    username: this.username,
+                    password: this.password,
+                    mainMaster: this.mainMaster,
+                    masters: this.masters,
+                    settings: this.settings,
+                    cricket: this.cricket
+                });
+            } else {
+                childbots[index] = {
+                    room: this.room,
+                    username: this.username,
+                    password: this.password,
+                    mainMaster: this.mainMaster,
+                    masters: this.masters,
+                    settings: this.settings,
+                    cricket: this.cricket
+                };
+            }
+            
+            db.mainbots[this.owner].childbots = childbots;
             saveBots(db);
         } catch (err) {
             console.log("saveConfig error:", err.message);
         }
     }
 
+    // ================= CONNECT =================
     connect() {
         this.ws = new WebSocket("wss://chatp.net:5333/server");
 
         this.ws.on("open", () => {
-            console.log(`✅ ${this.username} connected to chatp.net`);
+            console.log(`🔗 ${this.username} connecting to chatp.net...`);
             this.ws.send(JSON.stringify({
                 handler: "login",
                 username: this.username,
@@ -86,9 +111,11 @@ class ChildBot {
         });
 
         this.ws.on("close", () => {
-            console.log(`🔄 ${this.username} reconnecting...`);
+            console.log(`🔄 ${this.username} disconnected, reconnecting...`);
             clearInterval(this.repeatTimer);
-            setTimeout(() => this.connect(), 5000);
+            setTimeout(() => {
+                this.connect();
+            }, 5000);
         });
 
         this.ws.on("error", err => {
@@ -96,6 +123,7 @@ class ChildBot {
         });
     }
 
+    // ================= SEND TO ROOM =================
     send(text) {
         try {
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
@@ -111,6 +139,7 @@ class ChildBot {
         }
     }
 
+    // ================= SEND PM =================
     sendPM(to, text) {
         try {
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
@@ -126,6 +155,7 @@ class ChildBot {
         }
     }
 
+    // ================= JOIN ROOM =================
     joinRoom() {
         try {
             this.ws.send(JSON.stringify({
@@ -133,17 +163,24 @@ class ChildBot {
                 id: packet(),
                 name: this.room
             }));
-        } catch {}
+        } catch (err) {
+            console.log("Join Room Error:", err.message);
+        }
     }
 
+    // ================= QUIZ =================
     nextQuestion() {
         if (!this.settings.quiz) return;
+        
         clearInterval(this.repeatTimer);
         this.repeatCount = 0;
+        
         let q = generateQuestion();
         this.currentAnswer = q.answer.toString().toLowerCase();
         this.questionStartTime = Date.now();
+        
         this.send(q.question);
+        
         this.repeatTimer = setInterval(() => {
             this.repeatCount++;
             if (this.currentAnswer === null) {
@@ -155,22 +192,49 @@ class ChildBot {
                 clearInterval(this.repeatTimer);
                 this.send(`❌ Time up!\n\nAnswer:\n${this.currentAnswer}`);
                 this.currentAnswer = null;
-                setTimeout(() => this.nextQuestion(), 5000);
+                setTimeout(() => {
+                    this.nextQuestion();
+                }, 5000);
             }
         }, 15000);
     }
 
+    // ================= HANDLE MESSAGES =================
     handle(msg) {
         try {
-            // ================= LOGIN =================
-            if (msg.handler === "login_event" && msg.type === "success") {
-                console.log(`✅ ${this.username} logged in`);
-                this.joinRoom();
-                setTimeout(() => {
-                    if (this.settings.quiz && this.currentAnswer === null) {
-                        this.nextQuestion();
+            // ================= LOGIN EVENT =================
+            if (msg.handler === "login_event") {
+                if (msg.type === "success") {
+                    console.log(`✅ ${this.username} logged in successfully`);
+                    this.loginSuccess = true;
+                    this.loginChecked = true;
+                    
+                    // 🔥 استدعاء الـ Callback عند نجاح الدخول
+                    if (this.loginCallback) {
+                        this.loginCallback(true, null);
                     }
-                }, 5000);
+                    
+                    this.joinRoom();
+                    setTimeout(() => {
+                        if (this.settings.quiz && this.currentAnswer === null) {
+                            this.nextQuestion();
+                        }
+                    }, 5000);
+                } else {
+                    console.log(`❌ ${this.username} login FAILED`);
+                    this.loginSuccess = false;
+                    this.loginChecked = true;
+                    
+                    // 🔥 استدعاء الـ Callback عند فشل الدخول
+                    if (this.loginCallback) {
+                        this.loginCallback(false, "Invalid username or password");
+                    }
+                    
+                    // إغلاق الاتصال إذا فشل الدخول
+                    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                        this.ws.close();
+                    }
+                }
                 return;
             }
 
@@ -193,9 +257,10 @@ class ChildBot {
 
                 let isMaster = this.masters.includes(sender);
                 let isMainMaster = sender === this.mainMaster;
+                let textLower = text.toLowerCase();
 
                 // ================= HELP =================
-                if ((text.toLowerCase() === "help" || text.toLowerCase() === "مساعدة") && isMaster) {
+                if ((textLower === "help" || textLower === "مساعدة") && isMaster) {
                     this.send(`🤖 *FUNBOT COMMANDS / أوامر البوت* 🤖
 
 📖 *English:* 🇬🇧
@@ -269,10 +334,12 @@ maslist → قائمة الماسترز
                         .map(([name, data]) => ({ name, score: data.score }))
                         .sort((a, b) => b.score - a.score)
                         .slice(0, 10);
+                    
                     if (list.length === 0) {
                         this.send("❌ No scores yet");
                         return;
                     }
+                    
                     let topMsg = "🏆 TOP 10 PLAYERS\n\n";
                     list.forEach((u, i) => {
                         topMsg += `${i + 1}. ${u.name} - ${u.score}\n`;
@@ -288,11 +355,14 @@ maslist → قائمة الماسترز
                         let topUser = Object.entries(users).sort((a, b) => b[1] - a[1])[0];
                         return { room, user: topUser ? topUser[0] : null, score: topUser ? topUser[1] : 0 };
                     });
+                    
                     let bestRoom = roomWinners.sort((a, b) => b.score - a.score)[0];
+                    
                     if (!bestRoom || !bestRoom.user) {
                         this.send("❌ No global data yet");
                         return;
                     }
+                    
                     this.send(`🌍 GLOBAL TOP ROOM\n\n🏆 Room: ${bestRoom.room}\n👑 Player: ${bestRoom.user}\n📊 Score: ${bestRoom.score}`);
                     return;
                 }
@@ -400,6 +470,7 @@ maslist → قائمة الماسترز
                     this.cricket.players.push(sender);
                     let remain = 3 - this.cricket.players.length;
                     this.send(`🏏 ${sender} joined\n\nPlayers:\n${this.cricket.players.join(", ")}\n\nRemaining:\n${remain}`);
+                    
                     if (this.cricket.players.length === 3) {
                         this.send(`✅ TEAM COMPLETE\n\n${this.cricket.players.join(", ")}`);
                     }
@@ -411,6 +482,7 @@ maslist → قائمة الماسترز
                 if (this.settings.cricket && text === "+bat") {
                     let results = [0, 1, 2, 3, 4, 6, "W"];
                     let result = results[Math.floor(Math.random() * results.length)];
+                    
                     if (result === "W") {
                         this.cricket.wickets++;
                         this.send(`❌ OUT\n\nScore:\n${this.cricket.runs}/${this.cricket.wickets}`);
@@ -429,34 +501,56 @@ maslist → قائمة الماسترز
                 }
 
                 // ================= QUIZ ANSWER =================
-                if (this.currentAnswer !== null && text.toLowerCase() === this.currentAnswer) {
+                if (this.currentAnswer !== null && textLower === this.currentAnswer) {
                     clearInterval(this.repeatTimer);
                     let correctAnswer = this.currentAnswer;
                     this.currentAnswer = null;
-                    let speedSec = Number(((Date.now() - this.questionStartTime) / 1000).toFixed(2));
+                    
+                    let speedSec = ((Date.now() - this.questionStartTime) / 1000);
+                    speedSec = Number(speedSec.toFixed(2));
+                    
                     if (!this.userScores[sender]) {
                         this.userScores[sender] = { score: 0, best: null, last: null };
                     }
+                    
                     let u = this.userScores[sender];
                     let addScore = 10;
-                    if (speedSec >= 2 && speedSec <= 4) addScore = 100;
-                    else if (speedSec >= 5 && speedSec <= 7) addScore = 80;
-                    else if (speedSec >= 8 && speedSec <= 10) addScore = 50;
+                    
+                    if (speedSec >= 2 && speedSec <= 4) {
+                        addScore = 100;
+                    } else if (speedSec >= 5 && speedSec <= 7) {
+                        addScore = 80;
+                    } else if (speedSec >= 8 && speedSec <= 10) {
+                        addScore = 50;
+                    }
+                    
                     u.score += addScore;
                     u.last = speedSec;
-                    if (!u.best || speedSec < u.best) u.best = speedSec;
+                    if (!u.best || speedSec < u.best) {
+                        u.best = speedSec;
+                    }
 
-                    if (!ROOM_SCORES[this.room]) ROOM_SCORES[this.room] = {};
-                    if (!ROOM_SCORES[this.room][sender]) ROOM_SCORES[this.room][sender] = 0;
+                    // ================= ROOM SCORE =================
+                    if (!ROOM_SCORES[this.room]) {
+                        ROOM_SCORES[this.room] = {};
+                    }
+                    if (!ROOM_SCORES[this.room][sender]) {
+                        ROOM_SCORES[this.room][sender] = 0;
+                    }
                     ROOM_SCORES[this.room][sender] += addScore;
 
-                    if (!GLOBAL_SCORES[sender]) GLOBAL_SCORES[sender] = 0;
+                    // ================= GLOBAL SCORE =================
+                    if (!GLOBAL_SCORES[sender]) {
+                        GLOBAL_SCORES[sender] = 0;
+                    }
                     GLOBAL_SCORES[sender] += addScore;
 
                     this.send(`🏆 ${sender} answered correctly!\n\n✅ Answer: ${correctAnswer}\n\n⚡ Speed: ${speedSec}s\n➕ Score Gained: ${addScore}\n📊 Total Score: ${u.score}\n\n🥇 Best Speed: ${u.best}s`);
 
                     setTimeout(() => {
-                        if (this.settings.quiz) this.nextQuestion();
+                        if (this.settings.quiz) {
+                            this.nextQuestion();
+                        }
                     }, 5000);
                     return;
                 }
