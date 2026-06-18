@@ -83,8 +83,6 @@ function sendPM(user, text) {
 }
 
 // ================= API ROUTES =================
-
-// ================= STATUS API =================
 app.get("/status", (req, res) => {
     res.json({
         loggedIn: loggedIn,
@@ -97,12 +95,10 @@ app.get("/status", (req, res) => {
     });
 });
 
-// ================= DEBUG API =================
 app.get("/debug", (req, res) => {
     res.json({ logs: debugLogs });
 });
 
-// ================= LOGIN API =================
 app.post("/login", (req, res) => {
     let username = req.body.username;
     let password = req.body.password;
@@ -143,7 +139,6 @@ function connectMainBot(res) {
         }
     }, 15000);
 
-    // ================= WS OPEN =================
     mainWS.on("open", () => {
         debug("✅ Main WebSocket connected");
         mainWS.send(JSON.stringify({
@@ -155,7 +150,6 @@ function connectMainBot(res) {
         debug(`🔑 Sending login for: ${currentMainBot.username}`);
     });
 
-    // ================= WS MESSAGE =================
     mainWS.on("message", raw => {
         let msg;
         try { 
@@ -164,14 +158,12 @@ function connectMainBot(res) {
             return; 
         }
 
-        // ================= LOGIN EVENT =================
         if (msg.handler === "login_event") {
             if (msg.type === "success") {
                 loggedIn = true;
                 clearTimeout(timeout);
                 debug(`✅ Mainbot "${currentMainBot.username}" logged in successfully`);
 
-                // Create account if not exists
                 if (!db.mainbots[currentMainBot.username]) {
                     db.mainbots[currentMainBot.username] = {
                         password: currentMainBot.password,
@@ -181,7 +173,6 @@ function connectMainBot(res) {
                     debug(`📁 Created new account: ${currentMainBot.username}`);
                 }
 
-                // Load saved bots
                 loadSavedBots(currentMainBot.username);
 
                 if (loginResponse) {
@@ -206,10 +197,8 @@ function connectMainBot(res) {
             return;
         }
 
-        // ================= IGNORE MESSAGES IF NOT LOGGED IN =================
         if (!loggedIn) return;
 
-        // ================= PRIVATE CHAT MESSAGE =================
         if (msg.handler === "chat_message") {
             let sender = msg.from || "";
             let body = (msg.body || "").trim();
@@ -218,7 +207,7 @@ function connectMainBot(res) {
             
             debug(`💬 PM from ${sender}: ${body.substring(0, 50)}${body.length > 50 ? '...' : ''}`);
 
-            // ================= HELP COMMAND =================
+            // ================= HELP =================
             if (body.toLowerCase() === "help" || body.toLowerCase() === "مساعدة") {
                 sendPM(sender, `🤖 *FUNBOT SERVER / سيرفر البوت* 🤖
 
@@ -258,7 +247,7 @@ To create a new bot, send:
                 return;
             }
 
-            // ================= CREATE BOT COMMAND =================
+            // ================= CREATE BOT =================
             if (body.toLowerCase().startsWith("dd ")) {
                 let parts = body.substring(3).trim().split(/\s+/);
                 
@@ -310,8 +299,16 @@ Please use:
                     return;
                 }
 
-                // ================= CREATE BOT =================
-                let config = {
+                // ================= CREATE BOT WITH VERIFICATION =================
+                debug(`🔨 Creating bot: ${username} → ${room}`);
+                debug(`🔑 Checking credentials for ${username}...`);
+
+                // إنشاء البوت مع متابعة حالة تسجيل الدخول
+                let loginSuccess = false;
+                let loginError = null;
+                let loginChecked = false;
+
+                const config = {
                     owner: currentMainBot.username,
                     room: room,
                     username: username,
@@ -332,20 +329,64 @@ Please use:
                 };
 
                 try {
-                    debug(`🔨 Creating bot: ${username} → ${room}`);
+                    // إنشاء البوت مع تمرير callback للتحقق من تسجيل الدخول
+                    let child = new ChildBot(config, currentMainBot.username, function(success, error) {
+                        loginSuccess = success;
+                        loginError = error;
+                        loginChecked = true;
+                    });
                     
-                    let child = new ChildBot(config, currentMainBot.username);
                     child.config = config;
-                    activeBots.push(child);
-
-                    // Save to database
-                    if (!db.mainbots[currentMainBot.username].childbots) {
-                        db.mainbots[currentMainBot.username].childbots = [];
+                    
+                    // 🔥 انتظر حتى يتم التحقق من تسجيل الدخول (مهلة 10 ثوان)
+                    let waitTime = 0;
+                    const maxWait = 10000; // 10 ثوان
+                    const interval = 500; // نصف ثانية
+                    
+                    while (!loginChecked && waitTime < maxWait) {
+                        await sleep(interval);
+                        waitTime += interval;
                     }
-                    db.mainbots[currentMainBot.username].childbots.push(config);
-                    saveBots(db);
+                    
+                    if (!loginChecked) {
+                        // لم يتم التحقق من الدخول خلال المهلة
+                        sendPM(sender, `❌ *BOT CREATION TIMEOUT!* ❌
 
-                    sendPM(sender, `✅ *BOT CREATED SUCCESSFULLY!* ✅
+━━━━━━━━━━━━━━━━━━━━━
+📖 *English:* 🇬🇧
+⏰ Server did not respond within 10 seconds.
+
+🔍 *Please check:*
+• Username: \`${username}\`
+• Room: \`${room}\`
+
+💡 Make sure the bot account exists and try again.
+
+━━━━━━━━━━━━━━━━━━━━━
+📖 *العربية:* 🇸🇦
+⏰ لم يستجب الخادم خلال 10 ثوان.
+
+🔍 *يرجى التحقق من:*
+• اسم المستخدم: \`${username}\`
+• الغرفة: \`${room}\`
+
+💡 تأكد من أن حساب البوت موجود وحاول مرة أخرى.`);
+                        debug(`⏰ Login timeout for ${username}`);
+                        return;
+                    }
+
+                    // ========== التحقق من نتيجة تسجيل الدخول ==========
+                    if (loginSuccess) {
+                        // ✅ نجح تسجيل الدخول
+                        activeBots.push(child);
+
+                        if (!db.mainbots[currentMainBot.username].childbots) {
+                            db.mainbots[currentMainBot.username].childbots = [];
+                        }
+                        db.mainbots[currentMainBot.username].childbots.push(config);
+                        saveBots(db);
+
+                        sendPM(sender, `✅ *BOT CREATED SUCCESSFULLY!* ✅
 
 ━━━━━━━━━━━━━━━━━━━━━
 📖 *English:* 🇬🇧
@@ -362,7 +403,38 @@ Please use:
 ━━━━━━━━━━━━━━━━━━━━━
 💡 Send \`help\` or \`مساعدة\` for more commands`);
 
-                    debug(`✅ Created childbot: ${username} → ${room}`);
+                        debug(`✅ Created childbot: ${username} → ${room}`);
+                    } else {
+                        // ❌ فشل تسجيل الدخول
+                        sendPM(sender, `❌ *BOT CREATION FAILED!* ❌
+
+━━━━━━━━━━━━━━━━━━━━━
+📖 *English:* 🇬🇧
+⚠️ Could not login with provided credentials.
+
+🔍 *Please check:*
+• Username: \`${username}\`
+• Password: \`******\`
+• Room: \`${room}\`
+
+💡 Make sure the bot account exists and the credentials are correct.
+
+━━━━━━━━━━━━━━━━━━━━━
+📖 *العربية:* 🇸🇦
+⚠️ لا يمكن تسجيل الدخول بالبيانات المدخلة.
+
+🔍 *يرجى التحقق من:*
+• اسم المستخدم: \`${username}\`
+• كلمة السر: \`******\`
+• الغرفة: \`${room}\`
+
+💡 تأكد من أن حساب البوت موجود والبيانات صحيحة.
+
+━━━━━━━━━━━━━━━━━━━━━
+❌ Error: ${loginError || "Invalid username or password"}`);
+
+                        debug(`❌ Failed: ${username} → ${room} (Login failed)`);
+                    }
 
                 } catch (err) {
                     debug(`❌ Failed creating bot: ${err.message}`);
@@ -372,18 +444,21 @@ Please use:
         }
     });
 
-    // ================= WS ERROR =================
     mainWS.on("error", err => {
         debug(`❌ WebSocket error: ${err.message}`);
     });
 
-    // ================= WS CLOSE =================
     mainWS.on("close", () => {
         if (loggedIn) {
             debug("🔌 Main WebSocket disconnected");
         }
         loggedIn = false;
     });
+}
+
+// ================= SLEEP FUNCTION =================
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // ================= HEALTH CHECK =================
