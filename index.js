@@ -303,7 +303,6 @@ Please use:
                 debug(`🔨 Creating bot: ${username} → ${room}`);
                 debug(`🔑 Checking credentials for ${username}...`);
 
-                // إنشاء البوت مع متابعة حالة تسجيل الدخول
                 let loginSuccess = false;
                 let loginError = null;
                 let loginChecked = false;
@@ -338,19 +337,19 @@ Please use:
                     
                     child.config = config;
                     
-                    // 🔥 انتظر حتى يتم التحقق من تسجيل الدخول (مهلة 10 ثوان)
+                    // استخدام setInterval للانتظار (بدلاً من await)
                     let waitTime = 0;
-                    const maxWait = 10000; // 10 ثوان
-                    const interval = 500; // نصف ثانية
+                    const maxWait = 10000;
+                    const interval = 500;
                     
-                    while (!loginChecked && waitTime < maxWait) {
-                        await sleep(interval);
+                    const waitInterval = setInterval(function() {
                         waitTime += interval;
-                    }
-                    
-                    if (!loginChecked) {
-                        // لم يتم التحقق من الدخول خلال المهلة
-                        sendPM(sender, `❌ *BOT CREATION TIMEOUT!* ❌
+                        if (loginChecked || waitTime >= maxWait) {
+                            clearInterval(waitInterval);
+                            
+                            if (!loginChecked) {
+                                // لم يتم التحقق من الدخول خلال المهلة
+                                sendPM(sender, `❌ *BOT CREATION TIMEOUT!* ❌
 
 ━━━━━━━━━━━━━━━━━━━━━
 📖 *English:* 🇬🇧
@@ -371,22 +370,21 @@ Please use:
 • الغرفة: \`${room}\`
 
 💡 تأكد من أن حساب البوت موجود وحاول مرة أخرى.`);
-                        debug(`⏰ Login timeout for ${username}`);
-                        return;
-                    }
+                                debug(`⏰ Login timeout for ${username}`);
+                                return;
+                            }
 
-                    // ========== التحقق من نتيجة تسجيل الدخول ==========
-                    if (loginSuccess) {
-                        // ✅ نجح تسجيل الدخول
-                        activeBots.push(child);
+                            if (loginSuccess) {
+                                // ✅ نجح تسجيل الدخول
+                                activeBots.push(child);
 
-                        if (!db.mainbots[currentMainBot.username].childbots) {
-                            db.mainbots[currentMainBot.username].childbots = [];
-                        }
-                        db.mainbots[currentMainBot.username].childbots.push(config);
-                        saveBots(db);
+                                if (!db.mainbots[currentMainBot.username].childbots) {
+                                    db.mainbots[currentMainBot.username].childbots = [];
+                                }
+                                db.mainbots[currentMainBot.username].childbots.push(config);
+                                saveBots(db);
 
-                        sendPM(sender, `✅ *BOT CREATED SUCCESSFULLY!* ✅
+                                sendPM(sender, `✅ *BOT CREATED SUCCESSFULLY!* ✅
 
 ━━━━━━━━━━━━━━━━━━━━━
 📖 *English:* 🇬🇧
@@ -403,10 +401,10 @@ Please use:
 ━━━━━━━━━━━━━━━━━━━━━
 💡 Send \`help\` or \`مساعدة\` for more commands`);
 
-                        debug(`✅ Created childbot: ${username} → ${room}`);
-                    } else {
-                        // ❌ فشل تسجيل الدخول
-                        sendPM(sender, `❌ *BOT CREATION FAILED!* ❌
+                                debug(`✅ Created childbot: ${username} → ${room}`);
+                            } else {
+                                // ❌ فشل تسجيل الدخول
+                                sendPM(sender, `❌ *BOT CREATION FAILED!* ❌
 
 ━━━━━━━━━━━━━━━━━━━━━
 📖 *English:* 🇬🇧
@@ -433,8 +431,10 @@ Please use:
 ━━━━━━━━━━━━━━━━━━━━━
 ❌ Error: ${loginError || "Invalid username or password"}`);
 
-                        debug(`❌ Failed: ${username} → ${room} (Login failed)`);
-                    }
+                                debug(`❌ Failed: ${username} → ${room} (Login failed)`);
+                            }
+                        }
+                    }, interval);
 
                 } catch (err) {
                     debug(`❌ Failed creating bot: ${err.message}`);
@@ -454,11 +454,6 @@ Please use:
         }
         loggedIn = false;
     });
-}
-
-// ================= SLEEP FUNCTION =================
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // ================= HEALTH CHECK =================
